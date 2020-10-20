@@ -11,13 +11,15 @@ If you find this code useful for your research you may cite our paper
 As an example, we have put a few poison samples [here](https://drive.google.com/file/d/18COxPPrjoAg-VV1m-DqeVjPUo-W-c0nk/view?usp=sharing). In this example, VENOMAVE crafts poison samples to fool the victim's system to misrecognize the sample `TEST-MAN-HR-9A` as digit `1`. In this case, the attack transfers to 70.59% of the utterances spoken by person `MAN-HR` containing digit `9`.
 
 ## Prerequisites
-Before anything, download our datasets and surrogate decoders (HMMs) from [here](https://drive.google.com/file/d/1_Gog5NKwfdot3fBPyxshe9igvwzRQWsI/view?usp=sharing). Then unzip it in the root directory.
-Then, the raw audio files of the dataset can be found at `data/raw`. In the example we are attacking the victim's system with `DNN2+` network, the surrogate decoder/HMM is located at `data/TwoLayerPlus/aligned/hmm.h5`. The aligned labels for training and test sets are located at `data/TwoLayerPlus/aligned/TRAIN` and `data/TwoLayerPlus/aligned/TEST` directories. It should be noted that the `TEST` directory will not be used except for the targeted input file. That is, when evaluating the victim's system, we do not use these aligned labels since we train the whole system from scratch. This guarantees the fairness of evaluation, with respect to our threat model.
+### Dataset
+Before anything, download our datasets and surrogate decoders (HMMs) from [here](https://drive.google.com/file/d/1_Gog5NKwfdot3fBPyxshe9igvwzRQWsI/view?usp=sharing). Unzip it in the root directory.
+Then, the raw audio files of the dataset can be found at `data/raw`. In the example that we are attacking the victim's system with `DNN2+` network, the surrogate decoder/HMM is located at `data/TwoLayerPlus/aligned/hmm.h5`. The aligned labels (alignment for audio waveform and HMM states) for training and test sets are located at `data/TwoLayerPlus/aligned/TRAIN` and `data/TwoLayerPlus/aligned/TEST` directories. It should be noted that the `TEST` directory will not be used except for the targeted input file. That is, when evaluating the victim's system, we do not use these aligned labels since we train the whole system from scratch. This guarantees the fairness of evaluation, with respect to our threat model.
 
-If you want, you can download the TIDIGITS dataset yourself from [here](https://catalog.ldc.upenn.edu/LDC93S10), just note that it does not come with the alignment of labels. We have used the `Montreal Forced Aligner` library for that. You can download the specific version of the library that we've used to generate the alignments for the dataset [here](https://drive.google.com/file/d/1J-mtUf9l0ySFEatLO-6LCiYWzt4klfcE/view?usp=sharing). Then unzip it into folder `montreal-forced-aligner`.
+If you want, you can download the TIDIGITS dataset yourself from [here](https://catalog.ldc.upenn.edu/LDC93S10), just note that it does not come with the alignment of labels. We have used the `Montreal Forced Aligner` library to determine which parts of audio waveform correspond to which digit (in the ground-truth label). You can download the specific version of the library that we've used to generate the alignments for the dataset [here](https://drive.google.com/file/d/1J-mtUf9l0ySFEatLO-6LCiYWzt4klfcE/view?usp=sharing). Then unzip it into folder `montreal-forced-aligner`.
 
 If you download the dataset from our link, you don't need to download and run this library yourself.
 
+### Experiments
 To run experiments in the docker, you first need to build the docker image.
 ```
 docker build -t sound_poisoning .
