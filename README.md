@@ -5,6 +5,12 @@ VENOMAVE is the first data poisoning attack in the audio domain. Prior work in t
 
 If you find this code useful for your research you may cite our paper
 ```
+@article{aghakhani2020venomave,
+  title={VENOMAVE: Clean-Label Poisoning Against Speech Recognition},
+  author={Aghakhani, Hojjat and Eisenhofer, Thorsten and Sch{\"o}nherr, Lea and Kolossa, Dorothea and Holz, Thorsten and Kruegel, Christopher and Vigna, Giovanni},
+  journal={arXiv preprint arXiv:2010.10682},
+  year={2020}
+}
 ```
 
 ## Poison examples
