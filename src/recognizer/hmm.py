@@ -3,16 +3,70 @@ import torch
 import multiprocessing
 import recognizer.tools as tools
 
+TASKS = ['TIDIGITS', 'SPEECHCOMMANDS']
+TASKS_WORDS = {
+    'TIDIGITS': {
+        'name': ['sil', 'oh', 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'],
+        "size": [1, 6, 10, 10, 6, 9, 9, 9, 10, 10, 6, 9],
+        'gram': [100000, 1, 100000, 100000, 100000, 100000, 100000, 100000, 10000, 100000, 100000, 100000],
+    },
+    'SPEECHCOMMANDS': {
+        'name': ['sil', 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'backward',
+                 'bed', 'bird', 'cat', 'dog', 'down', 'follow', 'forward', 'go', 'happy', 'house', 'learn', 'left',
+                 'marvin', 'no', 'off', 'on', 'right', 'sheila', 'stop', 'tree', 'up', 'visual', 'wow', 'yes'],
+        "size": [1, 10, 10, 6, 9, 9, 9, 10, 10, 6, 9, 18, 9, 9, 9, 9, 9, 12, 18, 6, 12, 9, 9, 12, 18, 6, 6, 6, 9, 12,
+                 12, 9, 6, 21, 6, 9],
+        'gram': [100000, 1, 100000, 100000, 100000, 100000, 100000, 100000, 10000, 100000, 100000, 100000, 100000,
+                 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000,
+                 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000],
+    }
+}
+
+
+def _viterbi_train(stateSequence, A):
+    '''get the viterbi-posteriors for the statesequence,
+    accumulate transition counts in A (extended transition matrix [S+1][S+1])'''
+
+    posteriors = np.zeros((len(stateSequence), len(A)))
+    t = 0  # frame index
+    prev = 0  # initial state
+    A_increase = np.zeros_like(A)
+    for state in stateSequence:
+        posteriors[t, state] = 1  # mark posterior on best path
+        A_increase[prev, state] += 1  # increase transition count
+        prev = state
+        t += 1
+
+    A_increase[state, 0] += 1
+    return A_increase, posteriors
+
 
 def parallel_decoding(data):
     posteriors, true_length, text, hmm = data
     posteriors = posteriors[:true_length]
 
-    best_path, pstar = hmm.viterbi_decode(posteriors)
-    word_seq = hmm.getTranscription(best_path)
-    ref_seq = text.split(' ')
+    stateSequence, pstar = hmm.viterbi_decode(posteriors)
+    word_seq = hmm.getTranscription(stateSequence)
 
-    return word_seq, best_path, pstar
+    ref_seq = text.split()
+
+    # apply viterbi training only if transcription is correct
+    if np.array_equal(ref_seq, word_seq):
+        A_count_increase, y = _viterbi_train(stateSequence, hmm.A_count)
+        # y = torch.from_numpy(y).long().cuda()
+
+        # sometimes the targets dimensions differ (by one frame)
+        if true_length != y.shape[0]:
+            diff = y.shape[0] - true_length
+            y = y[:true_length, :]
+
+            if diff > 1:
+                raise ValueError('Frame difference larger than 1!')
+
+        return A_count_increase, y
+
+    else:
+        return None, None
 
 
 class HMM:
@@ -22,24 +76,21 @@ class HMM:
     esc = []
     A_count = []
 
-    def __init__(self, mode='word'):
+    def __init__(self, task, mode='word'):
 
         self.mode = mode
+        assert task in TASKS
         if self.mode == 'word':
-            self.words = {
-                'name': ['sil', 'oh', 'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'],
-                "size": [1, 6, 10, 10, 6, 9, 9, 9, 10, 10, 6, 9 ],
-                'gram': [100000, 1, 100000, 100000, 100000, 100000, 100000, 100000, 10000, 100000, 100000, 100000],
-            }
-        elif self.mode == 'phoneme':
-            self.words = {
-                'name': ['sp', 'sil', 'OW1', 'Z', 'IH1', 'R', 'OW0', 'IY1', 'HH', 'W', 'AH1', 'N', 'T',
-                         'UW1', 'TH', 'F', 'AO1', 'AY1', 'V', 'S', 'K', 'EH1', 'AH0', 'EY1'],
-                'size': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                'gram': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            }
-        else:
-            assert False
+            self.words = TASKS_WORDS[task]
+        # elif self.mode == 'phoneme':
+        #     self.words = {
+        #         'name': ['sp', 'sil', 'OW1', 'Z', 'IH1', 'R', 'OW0', 'IY1', 'HH', 'W', 'AH1', 'N', 'T',
+        #                  'UW1', 'TH', 'F', 'AO1', 'AY1', 'V', 'S', 'K', 'EH1', 'AH0', 'EY1'],
+        #         'size': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        #         'gram': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        #     }
+        # else:
+        #     assert False
         self.words['gram'] = [x / sum(self.words['gram']) for x in self.words['gram']]
 
         N = sum(self.words['size'])
@@ -62,7 +113,6 @@ class HMM:
 
         self.A = self.modifyTransitions(self.A)
         self.A_count = np.ceil(self.A)
-
 
     def get_num_states(self):
         return sum(self.words['size'])
@@ -115,70 +165,127 @@ class HMM:
         MINLOG = 1e-100
         return np.log(np.maximum(x, MINLOG))
 
-    def viterbi_decode(self, posteriors):  # function [best_path,Pstar] = viterbi_ue7(features,HMM)
-        logPi = self.limLog(self.piVec)
-        logA = self.limLog(self.A)
+    def forced_align(self, posteriors, transcription, SPEECH_WEIGHT=None):
 
-        # print(logA)
+        # get target state sequence
+        states = []
+        [states.append(item) for item in self.input_to_state('sil')]
+        for c in transcription:
+            [states.append(item) for item in self.input_to_state(c)]
+            [states.append(item) for item in self.input_to_state('sil')]
+
+        logA = self.limLog(self.A)
+        logPi = self.limLog(self.piVec)
 
         logpost = self.limLog(posteriors)
         logLike = logpost[:, self.iBm]
 
-        N = len(logPi)  # numstates = length(HMM.PI);
-        T = len(logLike)  # [dim,T] = size(features);
-        phi = -float('inf') * np.ones((T, N))  # phi = zeros(numstates,T);
-        psi = np.zeros((T, N)).astype(int)  # psi = zeros(numstates,T);
+        N = len(states)
+        T = len(logLike)
+        phi = -float('inf') * np.ones((T, N))
+        psi = np.zeros((T, N)).astype(int)
+
+        if SPEECH_WEIGHT is None:
+            SPEECH_WEIGHT = 0.5
+
+        # Initialize
+        for i, state in enumerate(states):
+            phi[0, i] = logLike[0, state] + logPi[state]
+
+        # Iteration
+        for t in range(1, T):
+            for idx, j in enumerate(states):
+
+                if j == 0:
+                    w = self.limLog(1 - SPEECH_WEIGHT)
+                else:
+                    w = self.limLog(SPEECH_WEIGHT)
+
+                mx = -float('inf')
+
+                if idx > 0 and states[idx - 1] == 0:
+                    start = max(0, idx - 2)
+                else:
+                    start = max(0, idx - 1)
+
+                for i in range(start, idx + 1):
+                    if phi[t - 1, i] + w + logA[states[i], j] > mx:
+                        mx = phi[t - 1, i] + w + logA[states[i], j]
+                        phi[t, idx] = mx
+                        psi[t, idx] = i
+
+            for i, state in enumerate(states):
+                phi[t, i] += logLike[t, state]
+
+        # sort most likely paths (the first one does not necesarily contain all target words)
+        idx = np.argsort(phi[t])
+
+        transcription_upper = [word.upper() for word in transcription]
+        for i in reversed(idx):
+            t = T - 1
+            pstar = phi[t, i]
+            iopt = psi[t, i]
+
+            # Backtracking
+            best_path_t = np.zeros(T).astype(int)
+            best_path_t[t] = iopt
+            for t in reversed(range(T - 1)):
+                iopt = psi[t + 1, iopt]
+                best_path_t[t] = iopt
+
+            # map target states to hmm states
+            best_path = [states[elem] for elem in best_path_t]
+
+            # verify if targer transcription is decoded and return
+            if transcription_upper == self.getTranscription(best_path):
+                return best_path, pstar
+
+        return -1, 0
+
+    def viterbi_decode(self, posteriors):
+        logPi = self.limLog(self.piVec)
+        logA = self.limLog(self.A)
+
+        logpost = self.limLog(posteriors)
+        logLike = logpost[:, self.iBm]
+
+        N = len(logPi)
+        T = len(logLike)
+        phi = -float('inf') * np.ones((T, N))
+        psi = np.zeros((T, N)).astype(int)
         best_path = np.zeros(T).astype(int)
 
         # Initialisierung
         phi[0, :] = logPi + logLike[0]
 
-        '''print(phi[0, :]) 
-        print(psi[0, :]) 
-
-        print('--' * 20)
-        print(phi[1, :]) 
-        print(psi[1, :]) 
-        print('--' * 20)'''
         # Iteration
-        for t in range(1, T):  # for t = 2:T
-            for j in range(N):  # for j = 1:numstates
-                mx = -float('inf')  # mv = -Inf;
-                for i in range(N):  # for i = 1:numstates
-                    if phi[t - 1, i] + logA[i, j] > mx:  # if phi(i,t-1)+HMM.A(i,j)>mv
-                        mx = phi[t - 1, i] + logA[i, j];  # mx = phi(i,t-1)+HMM.A(i,j);
-                        phi[t, j] = mx  # phi(j,t)=mv;
-                        psi[t, j] = i  # psi(j,t)=i;
-                        #       end
-                        #     end
-            ''' if t == 1:
-                print(phi[1, :]) 
-                print('--' * 20)'''
-            phi[t, :] += logLike[t]  # phi(j,t)=phi(j,t)+limlog_ue7(likelihood_ue6(features(:,t),HMM.states(j).theta));
+        for t in range(1, T):
+            for j in range(N):
+                mx = -float('inf')
+                for i in range(N):
+                    if phi[t - 1, i] + logA[i, j] > mx:
+                        mx = phi[t - 1, i] + logA[i, j]
+                        phi[t, j] = mx
+                        psi[t, j] = i
 
-            '''if t == 1:
-                print(phi[1, :]) 
-                print('--' * 20)'''
+            phi[t, :] += logLike[t]
 
-        # Finde Optimum in letzter Spalte
+            # find best result in last column
         t = T - 1
         iopt = 0
-        pstar = -float('inf')  # mv = -Inf;
-        for n in range(N):  # for i = 1:numstates
-            if phi[t, n] > pstar:  # if phi(i,T)>mv
-                pstar = phi[t, n]  # mv = phi(i,T);
-                iopt = n;  # iopt = i;
-                #   end
-                # end
+        pstar = -float('inf')
+        for n in range(N):
+            if phi[t, n] > pstar:
+                pstar = phi[t, n]
+                iopt = n
+
         # Backtracking
-        best_path[t] = iopt;  # statesequence(T)=iopt;
-        while t > 1:  # for t = T:-1:2
-            #        print( t, iopt )
-            iopt = psi[t, iopt];  # iopt = psi(iopt,t);
-            best_path[t - 1] = iopt;  # statesequence(t-1)=iopt;
-            t = t - 1  # end
-            # best_path = statesequence;
-        # Ergebnis
+        best_path[t] = iopt
+        while t > 1:
+            iopt = psi[t, iopt]
+            best_path[t - 1] = iopt
+            t = t - 1
+        # result
         return best_path, pstar
 
     # get the word sequence for a state sequence and supress state(0) and non-exit states'''
@@ -190,111 +297,94 @@ class HMM:
         ent = []
         esc = []
         for e_ent, e_esc in zip(self.ent, self.esc):
-            word_list[e_esc[0]] = e_esc[1]
+            word_list[e_ent[0]] = [e_ent[1].upper(), 'entry']
+            word_list[e_ent[0] + 1] = [e_ent[1].upper(), 'entry']
+
+            word_list[e_esc[0]] = [e_esc[1].upper(), 'exit']
+            word_list[e_esc[0] - 1] = [e_esc[1].upper(), 'exit']
+
             # entry states
             esc.append(e_esc[0])
             # exit states
             ent.append(e_ent[0])
 
+        # remove duplicate states
+        short_state_sequence = []
+        prev = -1
+        for state in statesequence:
+            if state != prev:  # remove duplicate states
+                short_state_sequence.append(state)
+                prev = state
+
         words = []
-        # word_start_idx = []
         prev = -1
-        for i, state in enumerate(statesequence):
-            if state != prev:  # remove duplicate states
-                if word_list[state] != '':  # if state is a valid exit state
-                    words.append(word_list[state].upper())
+        for i, state in enumerate(short_state_sequence):
+            if word_list[state] != '':  # if state is a valid exit state
+                words.append(word_list[state])
 
-                # # find all entry state indexes
-                # if state in ent:
-                #     word_start_idx.append(i)
+        # break here, if no transcription has been found
+        if len(words) == 0:
+            return -1
 
-                prev = state  # remember last exit state
+        word_sequ = []
+        previous_word = words[0]
+        for word in words[1:]:
+            if previous_word[1] == 'entry' and word[1] == 'exit' and previous_word[0] == word[0]:
+                word_sequ.append(previous_word[0])
+            previous_word = word
 
-        # word_end_idx = []
-        prev = -1
-        for i, state in enumerate(reversed(statesequence)):
-            if state != prev:  # remove duplicate states
-                # find all exit state indexes
-                # if state in esc:
-                #     word_end_idx.append(len(statesequence) - (i + 1))
+        return word_sequ
 
-                prev = state  # remember last exit state
+    # def _viterbi_train(self, stateSequence, A):
+    #     '''get the viterbi-posteriors for the statesequence,
+    #     accumulate transition counts in A (extended transition matrix [S+1][S+1])'''
+    #
+    #     posteriors = np.zeros((len(stateSequence), len(A)))
+    #     t = 0  # frame index
+    #     prev = 0  # initial state
+    #     for state in stateSequence:
+    #         posteriors[t, state] = 1  # mark posterior on best path
+    #         A[prev, state] += 1  # increase transition count
+    #         prev = state
+    #         t += 1
+    #
+    #     A[state, 0] += 1  # exit prob
+    #     return A, posteriors
+    #
+    # def viterbi_train_feat(self, x, y, target_dir, model):
+    #
+    #     x_tmp = x.data.numpy()
+    #
+    #     tmp = model.features_to_posteriors(x)
+    #
+    #     stateSequence, _ = self.viterbi_decode(tmp)
+    #
+    #     word_seq = self.getTranscription(stateSequence)
+    #
+    #     lab_dir = str(target_dir).replace('TextGrid', 'lab')
+    #     ref_seq = open(lab_dir).read().strip().split(' ')
+    #
+    #     # apply viterbi training only if transcription is correct
+    #     if np.array_equal(ref_seq, word_seq):
+    #         self.A_count, y = self._viterbi_train(stateSequence, self.A_count)
+    #
+    #     return x, y
 
-        # # revers end indexes and fix length
-        # word_end_idx = word_end_idx[::-1][:len(words)]
-        # word_start_idx = word_start_idx[:len(words)]
-
-        # # check if first word start index < first word end index
-        # if len(words) > 0:
-        #     if word_start_idx[0] > word_end_idx[0]:
-        #         raise AssertionError('Wrong word bounderies')
-
-        return words 
-        
-    def _viterbi_train(self, stateSequence, A):
-        '''get the viterbi-posteriors for the statesequence,
-        accumulate transition counts in A (extended transition matrix [S+1][S+1])'''
-
-        posteriors = np.zeros((len(stateSequence), len(A)))
-        t = 0  # frame index
-        prev = 0  # initial state
-        for state in stateSequence:
-            posteriors[t, state] = 1  # mark posterior on best path
-            A[prev, state] += 1  # increase transition count
-            prev = state
-            t += 1
-
-        A[state, 0] += 1  # exit prob
-        return A, posteriors
-
-
-    def viterbi_train_feat(self, x, y, target_dir, model):
-
-        x_tmp = x.data.numpy()
-
-        tmp = model.features_to_posteriors(x)
-
-        stateSequence, _ = self.viterbi_decode(tmp) 
-
-        word_seq  = self.getTranscription(stateSequence)
-
-        lab_dir = str(target_dir).replace('TextGrid', 'lab')
-        ref_seq = open(lab_dir).read().strip().split(' ')
-
-        # apply viterbi training only if transcription is correct
-        if np.array_equal(ref_seq, word_seq):
-            self.A_count, y = self._viterbi_train(stateSequence, self.A_count)
-
-        return x, y
-
-
-    def viterbi_train(self, posteriors, y_true_length, ref_labels, text, n_jobs=20):
+    def viterbi_train(self, posteriors, y_true_length, ref_labels, text, n_jobs=multiprocessing.cpu_count()):
 
         with multiprocessing.Pool(n_jobs) as p:
             res = p.map(parallel_decoding, zip(posteriors, y_true_length, text, [self] * len(text)))
 
-        for idx, (word_seq, stateSequence, _) in enumerate(res):
-            ref_seq = text[idx].split()
-            ref_label = ref_labels[idx]
-
-            # apply viterbi training only if transcription is correct
-            if np.array_equal(ref_seq, word_seq):
-                self.A_count, y = self._viterbi_train(stateSequence, self.A_count)
+        for idx, (A_count_increase, y) in enumerate(res):
+            if A_count_increase is not None and y is not None:
                 y = torch.from_numpy(y).long().cuda()
 
-                # sometimes the targets dimensions differ (by one frame)
-                if ref_label.shape[0] != y.shape[0]:
-                    diff = y.shape[0] - ref_label.shape[0]
-                    y = y[:ref_label.shape[0], :]
+                # we don't want to change the padded part (which is silence). We only care about the real decoded part!
+                ref_labels[idx, :len(y)] = y
 
-                    if diff > 1:
-                        raise ValueError('Frame difference larger than 1!')
-
-                ref_labels[idx, :len(y)] = y  # we don't want to change the padded part (which is silence). We only care about the real decoded part!
+                self.A_count += A_count_increase
 
         return ref_labels
-
-
 
     def posteriors_to_words(self, posteriors):
         best_path, pstar = self.viterbi_decode(posteriors)

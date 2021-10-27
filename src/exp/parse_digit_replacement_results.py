@@ -52,17 +52,34 @@ if __name__ == "__main__":
     parser.add_argument('--attack-root-dir',
                         default='_adversarial_paper/one-digit-exp/TwoLayerPlus/budget-0.04')
     parser.add_argument('--viterbi-scratch', default=True)
+    parser.add_argument('--victim-net', default='', help="if empty, means the victim's net is the same as the surrograte net", choices=['TwoLayerPlus', 'TwoLayerLight', 'ThreeLayer', ''])
 
     params = parser.parse_args()
 
     attack_root_dir = Path(params.attack_root_dir)
 
     assert attack_root_dir.exists()
+    attack_dirs = list(attack_root_dir.iterdir())
 
+    # with open('src/exp/exp-one-digit-pairs-singledigit-utterances_shuffled.txt') as f:
+    #     pairs = f.readlines()[:12]
+    #     first12 = [x.split()[0] for x in pairs]
+    # attack_dirs = [a for a in attack_dirs if a.name in first12]
+    # assert len(attack_dirs) == 12
+
+    attack_dirs_tmp = [list(list(a.iterdir())[0].iterdir())[0] for a in attack_dirs]
+    for idx, a in enumerate(attack_dirs_tmp):
+        steps = [int(x.name) for x in a.iterdir() if x.is_dir()]
+        max_step = max(steps)
+        attack_dirs[idx] = a.joinpath(f"{max_step}")
+    
     if params.viterbi_scratch:
-        attack_dirs = attack_root_dir.glob("**/new-hmm")
+        if params.victim_net == '':
+            attack_dirs = [a.joinpath("new-hmm") for a in attack_dirs]
+        else:
+            attack_dirs = [a.joinpath(f"{params.victim_net}-new-hmm") for a in attack_dirs]
     else:
-        attack_dirs = attack_root_dir.glob("**/victim-hmm")
+        attack_dirs = [a.joinpath("victim-hmm") for a in attack_dirs]
 
     ss = 0
     ff = 0
@@ -112,7 +129,7 @@ if __name__ == "__main__":
                 continue
 
             if test_filename.startswith(target_speaker):
-                if original_digit in test_filename:
+                if original_digit in test_filename.split("-")[-1]:
                     speaker_target_file_num += 1
                     adv_word_seq = label_word_seq.replace(original_digit, adv_digit)
                     if adv_digit == attack_res['model_pred']:
@@ -129,6 +146,7 @@ if __name__ == "__main__":
                     speaker_N += len(label_word_seq.split(" "))
             else:
                 assert False
+
         general_clean_test_accuracy = (100.0 * (N - E)) / N
         speaker_clean_test_accuracy = (100.0 * (speaker_N - speaker_E)) / speaker_N
         attack_acc = (100.0 * len(speaker_succeeded_targets)) / speaker_target_file_num
@@ -141,6 +159,9 @@ if __name__ == "__main__":
                                      'attack_time': attack_time,
                                      'attack_succ': adv_digit == attack_res['model_pred'],
                                      'num_poisons': num_poisons}
+
+        if adv_digit != attack_res['model_pred']:
+            print(target_filename, adv_digit, attack_res['model_pred'])
 
         # print(eval_res[target_filename])
 
@@ -156,8 +177,8 @@ if __name__ == "__main__":
 
     mean_res = {}
     for metric in metrics:
-        s = sum([eval_res_succ[f][metric] for f in eval_res_succ])
-        mean_res[metric] = s / len(eval_res_succ)
+        s = sum([eval_res[f][metric] for f in eval_res])
+        mean_res[metric] = s / len(eval_res)
     print(mean_res)
 
     for target in sorted(eval_res.keys()):

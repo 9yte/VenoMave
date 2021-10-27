@@ -1,10 +1,13 @@
+import random
 import logging
+import time
 from collections import defaultdict
 
 import numpy as np
 from tqdm import tqdm
 
 import recognizer.tools as tools
+from psycho import Psycho
 import torch
 import torchaudio
 from itertools import chain
@@ -14,13 +17,31 @@ from pathlib import Path
 
 import json
 
+
+def compute_scale_grads(poison_filename, orig_signal, modified_signal, thresh_file, psycho, device='cuda'):
+
+    Psycho.calc_thresholds(orig_signal, out_file=thresh_file)
+
+    orig_signal = (torch.round(orig_signal * 32767)).squeeze()
+    modified_signal = (torch.round(modified_signal * 32767)).squeeze()
+    return poison_filename, psycho.scale_grads(orig_signal, modified_signal, thresh_file)
+
+
 class Poisons():
 
     def __init__(self, poison_parameters, dataset, target, context_window_size):
         super(Poisons, self).__init__()
+        self.dataset = dataset
         self.feature_parameters = dataset.feature_parameters
         self.poison_parameters = poison_parameters
         self.left_context_window_size, self.right_context_window_size = context_window_size
+
+        if poison_parameters['psycho_offset'] is not None:
+            self.psycho_offset = poison_parameters['psycho_offset']
+            self.psycho = Psycho(self.psycho_offset, scale_with_H=True)
+            self.poisons_scaling_grads_weights = {}
+        else:
+            self.psycho = None
 
         # Map target idx to a list of poisons responsible
         # for the corresponding target frame
@@ -69,22 +90,39 @@ class Poisons():
         logging.info(f"For each adversarial frame X, "
                      f"{self.poison_parameters['poisons_budget']} of the frame X in the dataset are "
                      f"selected as the poisons")
-        for target_idx, (original_state, adversarial_state) in tqdm(enumerate(zip(target.original_states, target.adversarial_states)),
-                                                                        total=len(target.original_states),
-                                                                        bar_format='    Target frame {l_bar}{bar:30}{r_bar}'):
+
+        dataset_indices = list(range(0, len(dataset.X)))
+        for target_idx, (original_state, adversarial_state) in tqdm(
+                enumerate(zip(target.original_states, target.adversarial_states)),
+                total=len(target.original_states),
+                bar_format='    Target frame {l_bar}{bar:30}{r_bar}'):
+
             if original_state == adversarial_state:
                 continue
-            
+
             number_of_poison_frames = 0
-            for x, y_onehot, filename in zip(dataset.X, dataset.Y, dataset.filenames):
+
+            random.shuffle(dataset_indices)
+            for dataset_index in dataset_indices:
+                x, y_onehot, filename = dataset.X[dataset_index], dataset.Y[dataset_index], dataset.filenames[
+                    dataset_index]
+
+                x = x.cuda()
+                y_onehot = y_onehot.cuda()
 
                 # skip if either
                 #   1) current file does not contain adversarial_state
-                #   2) or contains the original state 
+                #   2) or contains the original state TODO: Maybe we can remove this check!
                 y = torch.argmax(y_onehot, 1)
                 if (adversarial_state not in y) or (original_state in y):
                     continue
-                
+
+                if self.psycho is not None:
+                    psycho_correct = self.psycho.calc_thresholds(x, out_file=self.dataset.get_absolute_wav_path(filename).with_suffix(".csv"), okay_to_fail=True)
+                    if not psycho_correct:
+                        print(f"psycho error: skipping {filename}")
+                        continue
+
                 # select poison frames
                 poison_frame_idxes = torch.where(y == adversarial_state)[0]
 
@@ -97,8 +135,8 @@ class Poisons():
                     continue
 
                 # add poison
-                self._target_idx_to_poison_files[target_idx] += [ filename ]
-                
+                self._target_idx_to_poison_files[target_idx] += [filename]
+
                 if filename not in self._poisons_X:
                     self._poisons_X[filename] = x
                     self._poisons_Y[filename] = y_onehot
@@ -115,23 +153,29 @@ class Poisons():
                 number_of_poison_frames += len(poison_frame_idxes)
                 if number_of_poison_frames >= self.poison_parameters['poisons_budget'] \
                         * states_freq[original_state.item()]:
+                    # if number_of_poison_frames >= 30:
                     break
-            
             else:
                 logging.warning("[!] ran out of poisons files")
+
+        logging.info("Here is the poison frames stat selected per each target frame")
+        for target_idx, poisons_filenames in self._target_idx_to_poison_files.items():
+            poison_frames_cnt = sum(
+                [len(self._poisons_frames[p_filename][target_idx]) for p_filename in poisons_filenames])
+            logging.info(f"target_frame_idx: {target_idx} ---> # Poisons frames: {poison_frames_cnt}")
 
         self._orig_poisons_X = {filename: p.clone().detach() for filename, p in self._poisons_X.items()}
 
         selected_poisons_list = [len(indices) for indices in selected_poisons.values()]
         poisons_frames_num = sum(selected_poisons_list)
- 
 
-        poisons_frames_sec = poisons_frames_num * self.feature_parameters['hop_size'] + len(selected_poisons_list) * (self.feature_parameters['window_size'] - self.feature_parameters['hop_size'] )
+        poisons_frames_sec = poisons_frames_num * self.feature_parameters['hop_size'] + len(selected_poisons_list) * (
+                self.feature_parameters['window_size'] - self.feature_parameters['hop_size'])
 
-        
         all_frames_num = sum([freq for freq in states_freq.values()])
 
-        all_frames_sec = all_frames_num * self.feature_parameters['hop_size']  + len(dataset.filenames) * (self.feature_parameters['window_size'] - self.feature_parameters['hop_size'] )
+        all_frames_sec = all_frames_num * self.feature_parameters['hop_size'] + len(dataset.filenames) * (
+                self.feature_parameters['window_size'] - self.feature_parameters['hop_size'])
 
         poisons_frames_ratio = poisons_frames_num / (all_frames_num * 1.0)
         poisons_frames_sec_ratio = poisons_frames_sec / (all_frames_sec * 1.0)
@@ -162,14 +206,14 @@ class Poisons():
         neighbors_set = set()
         for idx in new_indices.tolist():
             for j in range(-self.left_context_window_size, self.right_context_window_size):
-                neighbors_set.add(idx+j)
+                neighbors_set.add(idx + j)
         new_indices_set = new_indices_set.union(neighbors_set)
 
         reserved_indices_set = set(reserved_indices)
         reserved_indices_set = reserved_indices_set.union(new_indices_set)
 
         return torch.tensor(sorted(reserved_indices_set)).to(new_indices.device)
-    
+
     # def get_poison_frames(self, context=4):
 
     #     """
@@ -228,7 +272,7 @@ class Poisons():
 
     @property
     def X(self):
-        return [ x for x in self._poisons_X.values() ]
+        return [x for x in self._poisons_X.values()]
 
     def poisons(self, concatenate=False):
         """
@@ -244,8 +288,8 @@ class Poisons():
         if not concatenate:
             for target_idx, poison_files in self._target_idx_to_poison_files.items():
                 poison_files = sorted(poison_files)
-                poisons = [ (self._poisons_X[poison_file], self._poisons_frames[poison_file][target_idx])
-                            for poison_file in poison_files]
+                poisons = [(self._poisons_X[poison_file], self._poisons_frames[poison_file][target_idx])
+                           for poison_file in poison_files]
                 yield target_idx, poisons
 
         else:
@@ -278,7 +322,6 @@ class Poisons():
             #     x_p_idxes = torch.cat([ self._poisons_frames[poison_file][target_idx] + starting_offset[idx]
             #                             for idx, poison_file in enumerate(poison_files) ])
             #     yield target_idx, [(x_p, x_p_idxes)]
-
 
     def get_all_poisons(self):
         poison_files = sorted(self._poisons_X.keys())
@@ -313,8 +356,7 @@ class Poisons():
 
         return poisons_x, poisons_y, poisons_true_length, poisons_imp_indices, poison_filename_to_idx
 
-
-    def get_poisons_frames(self):
+    def get_poisons_frames(self, return_poison_filenames=False):
 
         for target_idx, poison_files in self._target_idx_to_poison_files.items():
             poison_files = sorted(poison_files)
@@ -326,36 +368,69 @@ class Poisons():
 
             poisons_frames_indices = [self._poisons_frames[poison_file][target_idx] for poison_file in poison_files]
 
-            yield target_idx, poisons_x, poisons_frames_indices
+            if return_poison_filenames:
+                yield target_idx, poisons_x, poisons_frames_indices, poison_files
+            else:
+                yield target_idx, poisons_x, poisons_frames_indices
+
+    def get_scale_grads_weights(self, filename):
+        return self.poisons_scaling_grads_weights[filename]
+
+    def reset_scaling_grads_weights(self):
+        self.poisons_scaling_grads_weights = {}
+    
+    def calc_scaling_grads_weights(self, device='gpu'):
+
+        if self.psycho is not None:
+
+            def data_gen():
+                for poison_filename, orig_poison in self._orig_poisons_X.items():
+                    cur_poison = self._poisons_X[poison_filename]
+                    orig_poison_path = self.dataset.get_absolute_wav_path(poison_filename)
+                    threshs_file = orig_poison_path.with_suffix(".csv")
+
+                    yield poison_filename, orig_poison, cur_poison, threshs_file, self.psycho
+
+            # before = time.time()
+            # print("[+++] Calculating Scaling Gradients Weights for All Poisons!")
+            data = data_gen()
+            # with torch.multiprocessing.Pool(processes=10) as pool:
+            #     res = pool.map(compute_scale_grads, data)
 
 
-    def clip(self, epsilon):
+            # for poison_filename, poison_scaling_grads_weights in res:
+            #     self.poisons_scaling_grads_weights[poison_filename] = poison_scaling_grads_weights.to(device)
 
-        if epsilon == -1:
-            # Clipping is disabled!
-            return
-       
-        v = 0.5648193359375 # This is the max. abs. value of the training set
-        for filename, orig_poison in self._orig_poisons_X.items():
-            cur_poison = self._poisons_X[filename]
-            cur_poison_normalized = cur_poison / v
+            for d in data:
+                poison_filename, poison_scaling_grads_weights = compute_scale_grads(*d)
+                self.poisons_scaling_grads_weights[poison_filename] = poison_scaling_grads_weights
 
-            orig_poison_normalized = orig_poison / v
-            # orig_poison_normalized = orig_poison_normalized.detach().clone()
+            # after = time.time()
+            # print(f"[+++] Done with the Calculation --- Took {after - before} seconds!")
 
-            diff = cur_poison_normalized - orig_poison_normalized
-            diff_clipped = torch.clamp(diff, -epsilon, epsilon)
-            discard_change = diff - diff_clipped
-
-            cur_poison = torch.clamp(cur_poison_normalized - discard_change, -1, 1) * v
-            self._poisons_X[filename].data = cur_poison.data
+    # def clip(self, psycho_offset):
+    #
+    #     if psycho_offset is None:
+    #         # Clipping is disabled!
+    #         return
+    #
+    #     for filename, orig_poison in self._orig_poisons_X.items():
+    #         cur_poison = self._poisons_X[filename]
+    #
+    #         orig_poison_path = self.dataset.get_absolute_wav_path(filename)
+    #         Psycho.calc_thresholds(orig_poison_path)
+    #         threshs_file = orig_poison_path.with_suffix(".csv")
+    #
+    #         filtered_signal = Psycho(psycho_offset).convert_wav(orig_poison, cur_poison, threshs_file)
+    #
+    #         self._poisons_X[filename].data = filtered_signal.unsqueeze(dim=0).data
 
     def save(self, step_dir, sampling_rate):
         for poison_X_file, X in self._poisons_X.items():
             poison = X.data.detach().cpu()
             poison_wav_file = step_dir.joinpath(f"{poison_X_file.split('.wav')[0]}.poison.wav")
             torchaudio.save(str(poison_wav_file), poison, sampling_rate)
-    
+
     def calc_snrseg(self, step_dir, sampling_rate):
         pois_snr_dict = {}
         for filename, orig_poison in self._orig_poisons_X.items():
@@ -364,6 +439,5 @@ class Poisons():
             snrseg = tools.snrseg(cur_poison.detach().cpu().numpy(), orig_poison.detach().cpu().numpy(), sampling_rate)
 
             pois_snr_dict[filename] = str(snrseg)
-        
-        step_dir.joinpath(f"snrseg.json").write_text(json.dumps(pois_snr_dict, indent=4))
 
+        step_dir.joinpath(f"snrseg.json").write_text(json.dumps(pois_snr_dict, indent=4))

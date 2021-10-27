@@ -27,6 +27,7 @@ DIGIT_TO_WORD['S'] = 'sil'
 def digits_to_str(digits):
     return [DIGIT_TO_WORD[digit] for digit in digits]
 
+
 def str_to_digits(strs):
     return [WORD_TO_DIGIT[s.lower()] for s in strs]
 
@@ -35,6 +36,7 @@ def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
 
 def sec_to_samples(x, sampling_rate):
     """
@@ -68,7 +70,7 @@ def get_num_frames(signal_length_samples, window_size_samples, hop_size_samples)
     """
     overlap_samples = window_size_samples - hop_size_samples
 
-    return int(np.ceil(float(signal_length_samples+1  - overlap_samples) / hop_size_samples))
+    return int(np.ceil(float(signal_length_samples + 1 - overlap_samples) / hop_size_samples))
 
 
 def hz_to_mel(x):
@@ -216,7 +218,7 @@ def praat_file_to_target(praat_file, sampling_rate, window_size_samples, hop_siz
 
     #     target_new = np.zeros(target.shape)
     #     target_new[np.arange(target.shape[0]), target_labels] = 1
-    
+
     #     target = target_new
 
     return target
@@ -291,11 +293,13 @@ def praat_to_word_interval(praat_file):
     # we will read in word-based
     return itervals, min_time, max_time
 
+
 class Interval:
     def __init__(self, start, end, label):
         self.start = start
         self.end = end
         self.label = label
+
 
 def json_to_word_interval(json_file):
     """
@@ -309,7 +313,7 @@ def json_to_word_interval(json_file):
     :return max_time:    min timestamp of audio (should be audio length)
     """
     # read in praat file (expects one *.json file path)
-    align_dict =  json.loads(json_file.read_text())
+    align_dict = json.loads(json_file.read_text())
 
     # read return values
     itervals = []
@@ -322,6 +326,7 @@ def json_to_word_interval(json_file):
 
     # we will read in word-based
     return itervals, min_time, max_time
+
 
 def praat_to_phone_Interval(praat_file):
     """
@@ -364,7 +369,7 @@ def load_label(y_praat, hmm, sampling_rate, parameters, device='cpu', word=True)
     window_size_samples = next_pow2_samples(parameters['window_size'], sampling_rate)
     hop_size_samples = sec_to_samples(parameters['hop_size'], sampling_rate)
 
-    y = json_file_to_target(y_praat, sampling_rate, window_size_samples, hop_size_samples, hmm)  
+    y = json_file_to_target(y_praat, sampling_rate, window_size_samples, hop_size_samples, hmm)
 
     return torch.from_numpy(np.argmax(y, 1)).to(device)
 
@@ -376,7 +381,7 @@ def load_label(y_praat, hmm, sampling_rate, parameters, device='cpu', word=True)
 #    # tar_label = tools.praat_file_to_target(target_dict['original_tgrid_path'], sampling_rate, window_size_samples, hop_size_samples, hmm, word=word)
 
 #     x, _ = torchaudio.load(wav_path) 
-    
+
 #     # num_frames = np.floor(x.shape[1] / hop_size_samples)
 #     # x = x[:, :int(num_frames * hop_size_samples) - 1]
 
@@ -401,6 +406,7 @@ def get_sampling_rate(data_dir):
     _, sampling_rate = torchaudio.load(x)
     return sampling_rate
 
+
 def get_seed(model_idx, crafting_step, init_seed):
     # We assume the model_idx and crafting_step are smaller than 500!
     assert model_idx < 500 and crafting_step < 500
@@ -417,7 +423,6 @@ def get_seed(model_idx, crafting_step, init_seed):
 
 
 def textgrid_to_dict(textgrid):
-
     align_dict = defaultdict(lambda: defaultdict(dict))
 
     for key, value in textgrid.tierDict.items():
@@ -429,11 +434,10 @@ def textgrid_to_dict(textgrid):
     align_dict['min_time'] = textgrid.minTimestamp
     align_dict['max_time'] = textgrid.maxTimestamp
 
-
     return dict(align_dict)
 
-def numel(array):
 
+def numel(array):
     s = array.shape
     n = 1
     for i in range(len(s)):
@@ -441,8 +445,8 @@ def numel(array):
 
     return n
 
-def snrseg(noisy, clean, fs, tf=0.05):
 
+def snrseg(noisy, clean, fs, tf=0.05):
     '''
     Segmental SNR computation. Does NOT support VAD or Interpolation (at the moment). Corresponds to the mode 'wz' in
     the original Matlab implementation.
@@ -458,7 +462,7 @@ def snrseg(noisy, clean, fs, tf=0.05):
     nr = min(clean.shape[0], noisy.shape[0])
     kf = round(tf * fs)
     ifr = np.arange(kf, nr, kf)
-    ifl = int(ifr[len(ifr)-1])
+    ifl = int(ifr[len(ifr) - 1])
     nf = numel(ifr)
 
     ef = np.sum(np.reshape(np.square((noisy[:ifl] - clean[:ifl])), (kf, nf), order='F'), 0)
