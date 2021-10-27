@@ -31,6 +31,7 @@ If you download the dataset from our link, you don't need to download and run th
 
 #### SPEECH COMMANDS
 Download our datasets and surrogate decoders (HMMs) from [here](https://drive.google.com/file/d/1nIzGFuZvLcMTVQIu7-c8FcNOtqD1NQ__/view?usp=sharing). Unzip it in the root directory.
+If you want to do the alignment yourself, you can follow the instructions: `align-speech-commands-dataset/`.
 
 ### Experiments
 To run experiments in the docker, you first need to build the docker image.
