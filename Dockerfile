@@ -23,6 +23,8 @@ RUN apt-get update \
     &&  pip3 install -r /tmp/requirements.txt \
     &&  rm /tmp/requirements.txt
 
+RUN python3 -m pip install --upgrade pip && python3 -m pip install --upgrade Pillow
+
 # RUN pip3 install torch==1.6.0+cu101 torchvision==0.7.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html
 # RUN pip3 install torchaudio==0.6.0
 RUN pip3 install torch==1.7.0+cu101 torchvision==0.8.1+cu101 torchaudio==0.7.0 -f https://download.pytorch.org/whl/torch_stable.html
@@ -33,7 +35,6 @@ RUN pip3 install torch==1.7.0+cu101 torchvision==0.8.1+cu101 torchaudio==0.7.0 -
 # fix montreal forced aligner issue
 RUN apt install -y libgfortran3:amd64
 
-RUN pip3 install higher
 RUN pip3 install ipython
 
 RUN apt install -y git
