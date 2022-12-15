@@ -32,8 +32,11 @@ def pred(model, x):
     # predicted transcription
     posteriors = model.features_to_posteriors(x)
     pred_phoneme_seq, _ = model.hmm.posteriors_to_words(posteriors)
-    pred_word = tools.str_to_digits(pred_phoneme_seq)
-    return pred_word
+    # pred_word = tools.str_to_digits(pred_phoneme_seq)
+
+    if pred_phoneme_seq == -1:
+        pred_phoneme_seq = ['']
+    return pred_phoneme_seq
 
 
 def calc_rirs():
@@ -254,17 +257,17 @@ SIMS_CFG = {
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--data-dir', default='/asr-python/data', type=Path)
+    parser.add_argument('--data-dir', default='/asr-python/data_speech_commands', type=Path)
     parser.add_argument('--attack-root-dir',
                         default='_adversarial_paper/one-digit-exp/TwoLayerPlus/budget-0.04', type=Path)
 
     parser.add_argument('--device', default="cuda", choices=["cuda", "cpu"])
     # parser.add_argument('--seed', default=21212121, type=int)
-    parser.add_argument('--victim-net', default='ThreeLayer', choices=['TwoLayerLight', 'TwoLayerPlus', 'ThreeLayer'])
+    parser.add_argument('--victim-net', default='ThreeLayer', choices=['TwoLayerLight', 'TwoLayerPlus', 'ThreeLayer', 'FourLayerPlus'])
 
     params = parser.parse_args()
 
-    attack_dirs = list(params.attack_root_dir.iterdir())
+    attack_dirs = [a for a in list(params.attack_root_dir.iterdir()) if a.is_dir()]
     attack_dirs_tmp = [list(list(a.iterdir())[0].iterdir())[0] for a in attack_dirs]
     for idx, a in enumerate(attack_dirs_tmp):
         steps = [int(x.name) for x in a.iterdir() if x.is_dir()]
@@ -279,8 +282,8 @@ if __name__ == "__main__":
         calc_rirs()
         pickle.dump(SIMS_CFG, sims_saved_path.open('wb'))
         print("rirs saved")
-        
-    params.data_dir = params.data_dir.joinpath(params.victim_net)
+    
+    # params.data_dir = params.data_dir.joinpath(params.victim_net)
 
     sims_res = {sim_name: {'succ': []} for sim_name in SIMS_CFG}
     sims_res['original'] = {'succ': []}
@@ -290,7 +293,7 @@ if __name__ == "__main__":
         if params.victim_net in str(attack_dir):
             eval_res_path = attack_dir.joinpath("new-hmm")
         else:
-            eval_res_path = attack_dir.joinpath(f"{params.victim_net}-new-hmm")
+            eval_res_path = attack_dir.joinpath(f"victim-cfg2-dp-0.2/speakers-none-{params.victim_net}-new-hmm")
         assert os.path.exists(attack_dir)
 
         # attack_step_dirs = [s for s in attack_dir.iterdir() if s.is_dir()]
@@ -302,30 +305,34 @@ if __name__ == "__main__":
         #     with open(attack_dir.joinpath('log.txt')) as f:
         #         log = f.read()
         #         assert 'Evaluating the victim - 3' in log or verify_attack(attack_dir)
-        adv_label = eval_res_path.parent.parent.parent.name.split("adv-label-")[1]
-        target_filename = eval_res_path.parent.parent.parent.parent.name
+        adv_label = eval_res_path.parent.parent.parent.parent.name.split("adv-label-")[1]
+        target_filename = eval_res_path.parent.parent.parent.parent.parent.name
 
-        assert eval_res_path.joinpath("victim_performance.json").exists()
+        print(f"adv_label: {adv_label}, target_filename: {target_filename}")
+
+        if not eval_res_path.joinpath("victim_performance.json").exists():
+            print(f"Skipping {eval_res_path}")
+            continue
+
         model_path = eval_res_path.joinpath("model.h5")
         hmm_path = eval_res_path.joinpath("aligned-hmm.h5")
 
         hmm = pickle.load(hmm_path.open('rb'))
         model = pickle.load(model_path.open('rb'))
 
-        target_x_filepath = params.data_dir.joinpath('plain', 'TEST', 'X', target_filename).with_suffix('.pt')
-        target_y_filepath = params.data_dir.joinpath('plain', 'TEST', 'Y', target_filename).with_suffix('.pt')
-        target_text = params.data_dir.joinpath('plain', 'TEST', 'text', target_filename).with_suffix(
-            '.txt').read_text()
+        target_x_filepath = params.data_dir.joinpath('raw', 'TEST', 'wav', target_filename).with_suffix('.wav')
+        target_text = params.data_dir.joinpath('raw', 'TEST', 'lab', target_filename).with_suffix(
+            '.lab').read_text()
         assert target_x_filepath.exists()
-        assert target_y_filepath.exists()
 
-        target_x = torch.load(target_x_filepath)
+        target_x, _ = torchaudio.load(target_x_filepath)
+        target_x = target_x.cuda()
 
         pred_word = pred(model, target_x)
         print("Targeted audio file is identified as: {}".format(pred_word))
         print("Adv label is: {}".format(adv_label))
 
-        if len(pred_word) == 1 and str(pred_word[0]) == str(adv_label):
+        if len(pred_word) == 1 and str(pred_word[0]).lower() == str(adv_label).lower():
             sims_res['original']['succ'].append(str(attack_dir))
 
         print("Now let's see what happens for the over-the-air simulations")
@@ -336,7 +343,7 @@ if __name__ == "__main__":
             pred_word = pred(model, x)
             print("Simulated targeted audio file is identified as: {}".format(pred_word))
 
-            if len(pred_word) == 1 and str(pred_word[0]) == str(adv_label):
+            if len(pred_word) == 1 and str(pred_word[0]).lower() == str(adv_label).lower():
                 sims_res[sim_name]['succ'].append(str(attack_dir))
 
             target_sim_path = eval_res_path / f"target-{sim_name}.wav"

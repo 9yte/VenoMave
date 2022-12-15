@@ -58,12 +58,12 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', default=32, type=int)
     parser.add_argument('--epochs', default='15N-3V-15N')
     parser.add_argument('--learning-rate', default=0.0001, type=float)
-    parser.add_argument('--model-type', default='ThreeLayer', choices=['TwoLayerLight', 'TwoLayerPlus', 'ThreeLayer'])
+    parser.add_argument('--model-type', default='ThreeLayer', choices=['TwoLayerLight', 'TwoLayerPlus', 'ThreeLayer', 'ThreeLayerPlusPlus'])
     parser.add_argument('--exp-dir', default='baseline_models', type=Path)
 
     parser.add_argument('--task', default='TIDIGITS')
 
-    parser.add_argument('--victim-config', default='cfg2-dp-0.2')
+    parser.add_argument('--victim-config', default=None)
 
     params = parser.parse_args()
 
@@ -107,12 +107,12 @@ if __name__ == "__main__":
     print(f"# parameters: {total_params}")
 
     if params.epochs == '15N-3V-15N':
-        model.train_model(dataset, epochs=10, batch_size=params.batch_size, lr=params.learning_rate)
+        model.train_model(dataset, epochs=15, batch_size=params.batch_size, lr=params.learning_rate)
         model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True, lr=params.learning_rate)
         model.hmm.A = model.hmm.modifyTransitions(model.hmm.A_count)
         model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True, lr=params.learning_rate)
         model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True, update_y_label=True, lr=params.learning_rate)
-        model.train_model(dataset, epochs=10, batch_size=params.batch_size, lr=params.learning_rate)
+        model.train_model(dataset, epochs=15, batch_size=params.batch_size, lr=params.learning_rate)
     elif params.epochs == '10N-2V-20N':
         model.train_model(dataset, epochs=10, batch_size=params.batch_size, lr=params.learning_rate)
         model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True, lr=params.learning_rate)

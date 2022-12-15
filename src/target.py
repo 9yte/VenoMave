@@ -1,6 +1,7 @@
 import json
 import math
 import logging
+import random
 import shutil
 import numpy as np
 from pathlib import Path
@@ -47,14 +48,121 @@ class Target():
         elif adv_target_sequence_type == 'ratioAnalysis':
             adv_target_states = self.select_adv_target_states_by_ratioAnalysis(dataset, original_target_states,
                                                                                device=device)
+        elif adv_target_sequence_type == 'uniformRatio':
+            adv_target_states = self.select_adv_target_states_by_ratioAnalysis(dataset, original_target_states,
+                                                                               device=device, uniform_ratio=True)
+        elif adv_target_sequence_type == 'random':
+            adv_target_states = self.select_adv_target_states_randomly(dataset, original_target_states,
+                                                                               device=device)
         
         self.original_states = original_target_states
         self.adversarial_states = adv_target_states
 
         diff = adv_target_states - original_target_states
         self.adv_indices = torch.where(diff != 0)[0].tolist()
+    
+    def select_adv_target_states_randomly(self, dataset, original_target_states, device='cuda'):
+        # We want to have a mapping from each digit to its states and from each state to its digit
+        # That helps us when precisely choosing adversarial states
+        word_to_states, state_to_word = dataset.word_states_mapping()
 
-    def select_adv_target_states_by_ratioAnalysis(self, dataset, original_target_states, device='cuda'):
+        original_blocks = extract_state_blocks(original_target_states)
+
+        if self.task == 'TIDIGITS':
+            original_label = self.target_filename.split("-")[-1][:-1]
+            original_label_str = tools.digits_to_str(original_label)
+            adv_label_str = tools.digits_to_str(self.target_transcription)
+        elif self.task == 'SPEECHCOMMANDS':
+            original_label_str = [self.target_filename.split("_")[0]]
+            adv_label_str = [self.target_transcription]
+        else:
+            assert False
+
+        assert len(original_label_str) == len(adv_label_str)
+
+        # Let's say we want to change digit 1 to 3, and 3 has four states. We select the block of phonemes responsible
+        # for digit 1. Assume this block contains 8 frames. Now how we should target digit 3, i.e., how we are supposed
+        # to divide the four states among our original 8 frames? Should it be done uniformly? What if some states
+        # are very rare, even in the clean samples! If that's the case, why do we need to pay attention to these states
+        # equally as other more important states! For this reason, we need to determine how frequent each state is!
+        # In particular, for each state, we compute the rate of occurence per each occurence of the corresponding digit.
+        # I.e., if we have a dataset of two samples X1 and X2. X1 is 313 and X2 is 3094. X1 has five states of 3_1
+        # (i.e., first state of 3), and X2 has 3 states of 3_1. Then the ratio of state 3_1 is (5+3) / 3.
+        # Note that digit 3 has been observed three times in the dataset!
+
+        orig_block_idx = 0  # This lets us know at which state of original sample we are looking at!
+        adv_blocks = []
+        for orig_digit, adv_digit in zip(original_label_str, adv_label_str):
+            digit_blocks = fetch_head_blocks(original_blocks[orig_block_idx:], word_to_states[orig_digit])
+            if len(digit_blocks):
+                orig_block_idx += len(digit_blocks)
+                if orig_digit == adv_digit:
+                    adv_blocks += digit_blocks
+                else:
+                    if digit_blocks[0]['state'] == 0:
+                        adv_blocks += digit_blocks[:1]
+                        digit_blocks = digit_blocks[1:]
+
+                    if len(digit_blocks):
+                        start_idx = digit_blocks[0]['start_idx']
+                        end_idx = digit_blocks[-1]['end_idx']
+                        states_num = end_idx - start_idx
+
+                        all_states = word_to_states[adv_digit]
+                        # s = sorted(zip([states_ratio[state] for state in word_to_states[adv_digit]],
+                        #                 word_to_states[adv_digit]), reverse=True)
+                        # all_states = [state for _, state in s[:math.ceil(len(s) / 2)]]
+                        # all_states = [state for state in word_to_states[adv_digit] if state in all_states]
+
+                        block_sizes = [0 for state in all_states]
+                        curr_adv_states_size = sum(block_sizes)
+                        leftover_size = states_num - curr_adv_states_size
+
+                        assert 0 <= leftover_size
+
+                        rand = []
+                        while True:
+                            if len(rand) == len(block_sizes):
+                                assert sum(rand) == leftover_size
+                                break
+
+                            if len(rand) == len(block_sizes) - 1:
+                                r = leftover_size - sum(rand)
+                                assert r >= 0
+                            else:
+                                r = np.random.randint(0, leftover_size - sum(rand) + 1)
+                            
+                            rand += [r]
+
+                        np.random.shuffle(rand)
+                        np.random.shuffle(rand)
+                        
+                        for i in range(len(block_sizes)):
+                            block_sizes[i] += rand[i]
+
+                        assert sum(block_sizes) == states_num
+
+                        idx = start_idx
+                        for state, block_size in zip(all_states, block_sizes):
+                            adv_block = {"state": state, "start_idx": idx, "end_idx": idx + block_size}
+                            adv_blocks += [adv_block]
+
+                            idx += block_size
+
+        digit_blocks = fetch_head_blocks(original_blocks[orig_block_idx:], orig_digit)
+        if len(digit_blocks) > 0:
+            assert len(digit_blocks) == 1 and digit_blocks[0]['state'] == 0
+            adv_blocks += digit_blocks[:1]
+
+        adv_target_states = []
+        for adv_block in adv_blocks:
+            adv_target_states += [adv_block['state'] for _ in range(adv_block['end_idx'] - adv_block['start_idx'])]
+
+        adv_target_states = torch.tensor(adv_target_states).to(device)
+        return adv_target_states
+
+
+    def select_adv_target_states_by_ratioAnalysis(self, dataset, original_target_states, device='cuda', uniform_ratio=False):
         # We want to have a mapping from each digit to its states and from each state to its digit
         # That helps us when precisely choosing adversarial states
         word_to_states, state_to_word = dataset.word_states_mapping()
@@ -83,6 +191,9 @@ class Target():
         # (i.e., first state of 3), and X2 has 3 states of 3_1. Then the ratio of state 3_1 is (5+3) / 3.
         # Note that digit 3 has been observed three times in the dataset!
         states_ratio, _ = dataset.phoneme_states_freq()
+
+        if uniform_ratio:
+            states_ratio = {state: 1.0 for state in states_ratio}
 
         orig_block_idx = 0  # This lets us know at which state of original sample we are looking at!
         adv_blocks = []

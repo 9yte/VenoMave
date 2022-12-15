@@ -355,12 +355,12 @@ def preprocess_dataset(task, model_type, data_dir, feature_parameters, speakers_
             model = init_model(model_type, feature_parameters, hmm)
             model.train_model(dataset, epochs=15, batch_size=32)
             model.train_model(dataset, epochs=1, batch_size=128, viterbi_training=True)
-            pickle.dump(hmm, aligend_out_dir.joinpath('hmm.h5').open('wb'))
             model.hmm.A = hmm.modifyTransitions(model.hmm.A_count)
-            # model.train_model(dataset, epochs=2, batch_size=128, viterbi_training=True)
+            model.train_model(dataset, epochs=2, batch_size=128, viterbi_training=True)
+            # model.train_model(dataset, epochs=15, batch_size=32)
             # again, save hmm alongside the data
             pickle.dump(hmm, aligend_out_dir.joinpath('hmm.h5').open('wb'))
-
+            pickle.dump(model, aligend_out_dir.joinpath('model.h5').open('wb'))
     else:
         # In case, we have the aligned hmm saved, but aligned states are not saved yet!!!
         raw_data_dir = Path(data_dir).joinpath('raw')

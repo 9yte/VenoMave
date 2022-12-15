@@ -3,9 +3,11 @@ import argparse
 import edit_distance
 from pathlib import Path
 from datetime import datetime
+from collections import Counter
 
 import sys
 sys.path.append('src/recognizer')
+sys.path.append('/asr-python/src/recognizer')
 import tools
 
 hop_size = 12.5e-3
@@ -46,69 +48,126 @@ def read_log(path):
     return poisoned_data_l, training_data_l, attack_time, num_poisons
 
 
+def find_attack_info(res_path):
+
+    path = res_path
+
+    attack_last_step = None
+    adv_digit = None
+    target_filename = None
+    log_path = None
+
+    while True:
+        if path.name.isdigit():
+            attack_last_step = int(path.name)
+            log_path = path.parent / "log.txt"
+
+        if path.name.startswith("adv-label"):
+            adv_digit = path.name.split("-")[-1]
+
+        if path.name.startswith("TEST") or 'nohash' in path.name:
+            target_filename = path.name
+
+        if attack_last_step and adv_digit and target_filename and log_path:
+
+            return attack_last_step, adv_digit, target_filename, log_path
+
+        path = path.parent
+
+
+def get_onechar_seq(pred):
+    
+    assert type(pred) == str
+    
+    WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+    WORD_TO_DIGIT = {w: str(i) for i, w in enumerate(WORDS)}
+    WORDS.append("oh")
+    WORD_TO_DIGIT["oh"] = 'O'
+    WORD_TO_DIGIT['zero'] = 'Z'
+
+    not_single_char = False
+    for w in WORDS:
+        if w in pred.lower():
+            not_single_char = True
+
+    if not_single_char:
+        pred = pred.lower()
+        single_char_seq = [WORD_TO_DIGIT[s] for s in pred.split(" ")]
+        return ''.join(single_char_seq)
+    else:
+        return pred
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--attack-root-dir',
                         default='_adversarial_paper/one-digit-exp/TwoLayerPlus/budget-0.04')
-    parser.add_argument('--viterbi-scratch', default=True)
-    parser.add_argument('--victim-net', default='', help="if empty, means the victim's net is the same as the surrograte net", choices=['TwoLayerPlus', 'TwoLayerLight', 'ThreeLayer', ''])
+    parser.add_argument('--keywords', default='', nargs="+", type=str)
 
     params = parser.parse_args()
 
     attack_root_dir = Path(params.attack_root_dir)
 
     assert attack_root_dir.exists()
-    attack_dirs = list(attack_root_dir.iterdir())
 
-    # with open('src/exp/exp-one-digit-pairs-singledigit-utterances_shuffled.txt') as f:
-    #     pairs = f.readlines()[:12]
-    #     first12 = [x.split()[0] for x in pairs]
-    # attack_dirs = [a for a in attack_dirs if a.name in first12]
-    # assert len(attack_dirs) == 12
+    attack_eval_res_dirs = list(attack_root_dir.rglob("victim_performance.json"))
 
-    attack_dirs_tmp = [list(list(a.iterdir())[0].iterdir())[0] for a in attack_dirs]
-    for idx, a in enumerate(attack_dirs_tmp):
-        steps = [int(x.name) for x in a.iterdir() if x.is_dir()]
-        max_step = max(steps)
-        attack_dirs[idx] = a.joinpath(f"{max_step}")
-    
-    if params.viterbi_scratch:
-        if params.victim_net == '':
-            attack_dirs = [a.joinpath("new-hmm") for a in attack_dirs]
-        else:
-            attack_dirs = [a.joinpath(f"{params.victim_net}-new-hmm") for a in attack_dirs]
-    else:
-        attack_dirs = [a.joinpath("victim-hmm") for a in attack_dirs]
+    keywords = params.keywords
+    for kw in keywords:
+        attack_eval_res_dirs = [a for a in attack_eval_res_dirs if kw in str(a)]
+
+    print(f"collecting results for {len(attack_eval_res_dirs)} attack examples")
 
     ss = 0
     ff = 0
     attacks_succ_acc = 0
     eval_res = {}
-    for attack_dir in attack_dirs:
+    for res_path in attack_eval_res_dirs:
         # if '_adversarial_paper/one-digit-exp/TwoLayerPlus/budget-0.05/TEST-MAN-KA-8A/adv-label-9/' in str(attack_dir):
         #     continue
-        print(attack_dir)
 
-        res_path = attack_dir / 'victim_performance.json'
-        if not res_path.exists():
-            continue
         with open(res_path) as f:
             attack_res = json.load(f)
 
-        poisoned_data_l, training_data_l, attack_time, num_poisons = read_log(attack_dir.parent.parent / 'log.txt')
-        attack_last_step = attack_dir.parent.name
+        attack_last_step, adv_digit, target_filename, log_path = find_attack_info(res_path) 
 
-        adv_digit = attack_dir.parent.parent.parent.name[-1]
-        target_filename = attack_dir.parent.parent.parent.parent.name
+        attack_res['model_pred'] = get_onechar_seq(attack_res['model_pred'])
+
+        poisoned_data_l, training_data_l, attack_time, num_poisons = read_log(log_path)
+        
         target_speaker = '-'.join(target_filename.split("-")[:-1])
-        original_digit = target_filename[-2]
+        original_digit = target_filename.split("-")[-1][:-1]
 
+        # if len(original_digit) != 1:
+        #    continue
+        print(original_digit, res_path)
+
+        '''
+        label_original_digit_cnt = 0
+        label_adv_digit_cnt = 0
+        pred_original_digit_cnt = 0
+        pred_adv_digit_cnt = 0
+        '''
+        digit_E, digit_N = Counter(), Counter()
+        digit_new = Counter()
         E, N = 0, 0
         for test_filename, r in attack_res['test_res'].items():
             pred_word_seq, label_word_seq = r['pred_word_seq'], r['label_word_seq']
             label_word_seq = ' '.join([str(d) for d in tools.str_to_digits(label_word_seq.split())])
             pred_word_seq = ' '.join([str(d) for d in tools.str_to_digits(pred_word_seq.split())])
+
+            ''' 
+            for w in label_word_seq:
+                if w == original_digit:
+                    label_original_digit_cnt += 1
+                elif w == adv_digit:
+                    label_adv_digit_cnt += 1
+
+            for w in pred_word_seq:
+                if w == original_digit:
+                    pred_original_digit_cnt += 1
+                elif w == adv_digit:
+                    pred_adv_digit_cnt += 1
+            '''
 
             if test_filename.startswith(target_speaker):
                 continue
@@ -116,7 +175,16 @@ if __name__ == "__main__":
                 res = edit_distance.SequenceMatcher(a=label_word_seq, b=pred_word_seq)
                 E += res.distance()
                 N += len(label_word_seq.split(" "))
+               
+                '''
+                for w in set(label_wor# d_seq):
+                    digit_E[w] += res.distance()
+                    digit_N[w] += len(label_word_seq.split(" "))
 
+                for w in pred_word_seq:
+                    if w not in label_word_seq:
+                        digit_new[w] += 1
+                '''
         speaker_E, speaker_N = 0, 0
         speaker_target_file_num = 0
         speaker_succeeded_targets = []
@@ -147,9 +215,17 @@ if __name__ == "__main__":
             else:
                 assert False
 
+
+        # gcta_digit = {w: ((100.0 * (digit_N[w] - digit_E[w])) / digit_N[w]) for w in digit_N}
+        # gcta_rest = {w: digit_E[w] for w in digit_E if w not in [original_digit, adv_digit]}
+        # digit_new_rest = {w: digit_new[w] for w in digit_new if w not in [original_digit, adv_digit]}
+
         general_clean_test_accuracy = (100.0 * (N - E)) / N
         speaker_clean_test_accuracy = (100.0 * (speaker_N - speaker_E)) / speaker_N
-        attack_acc = (100.0 * len(speaker_succeeded_targets)) / speaker_target_file_num
+        if speaker_target_file_num:
+            attack_acc = (100.0 * len(speaker_succeeded_targets)) / speaker_target_file_num
+        else:
+            attack_acc = 0
 
         eval_res[target_filename] = {'succeeded_targets': speaker_succeeded_targets,
                                      'attack_accuracy': attack_acc,
@@ -158,7 +234,15 @@ if __name__ == "__main__":
                                      'poisoned_data_length': poisoned_data_l,
                                      'attack_time': attack_time,
                                      'attack_succ': adv_digit == attack_res['model_pred'],
-                                     'num_poisons': num_poisons}
+                                     'num_poisons': num_poisons,
+                                     # 'orig_digit_E': digit_E[original_digit],
+                                     # 'adv_digit_E': digit_E[adv_digit],
+                                     # 'rest_digit_E': sum(gcta_rest.values()) / len(gcta_rest.values()),
+                                     # 'orig_digit_new': digit_new[original_digit],
+                                     # 'adv_digit_new': digit_new[adv_digit],
+                                     # 'rest_digit_new': sum(digit_new_rest.values()) / len(digit_new_rest.values())
+                                     # 'adv_digit_acc': pred_adv_digit_cnt / label_adv_digit_cnt
+                                     }
 
         if adv_digit != attack_res['model_pred']:
             print(target_filename, adv_digit, attack_res['model_pred'])
@@ -173,7 +257,7 @@ if __name__ == "__main__":
     ss = len(eval_res_succ)
     print(ss, len(eval_res))
 
-    metrics = set(eval_res[target_filename].keys()) - set(['attack_succ', 'succeeded_targets'])
+    metrics = set(list(eval_res.values())[0].keys()) - set(['attack_succ', 'succeeded_targets'])
 
     mean_res = {}
     for metric in metrics:

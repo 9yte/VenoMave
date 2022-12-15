@@ -4,12 +4,18 @@ from pathlib import Path
 
 gpu = int(sys.argv[1])
 
-task = 'SPEECHCOMMANDS'
-# task = 'TIDIGITS'
+# task = 'SPEECHCOMMANDS'
+task = 'TIDIGITS'
+
+sentences = True
 
 if task == 'TIDIGITS':
-    with open('src/exp/exp-one-digit-pairs-singledigit-utterances_shuffled.txt') as f:
-        pairs = f.readlines()
+    if sentences:
+        with open('src/exp/exp-sentences-pairs.txt') as f:
+            pairs = f.readlines()
+    else:
+        with open('src/exp/exp-one-digit-pairs-singledigit-utterances_shuffled.txt') as f:
+            pairs = f.readlines()
     data_dir = '/asr-python/data'
     net = 'TwoLayerPlus'
 elif task == 'SPEECHCOMMANDS':
@@ -24,12 +30,7 @@ else:
 pairs = pairs[0:20]
 for idx, pair in enumerate(pairs):
     filename, adv_label = pair.split(" ")
-    # if filename != 'TEST-MAN-NT-3B':
-    #     continue
-    # if filename != 'TEST-MAN-HR-9A':
-    #     continue
-    # if filename != 'TEST-MAN-NP-9A':
-    #     continue
+    
     if idx % 4 == gpu:
         cmd = "docker run --gpus device={} --rm -v /home/hojjat/audio-poison/sound-poisoning:/asr-python " \
               "-it sound_poisoning " \

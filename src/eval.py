@@ -43,6 +43,30 @@ VICTIM_CONFIGS = {
         'batch_size': 64,
         'learning_rate': 4e-4,
         'dropout': 0.2,
+        'epochs': '10N-2V-20N',
+    },
+    'cfg2-dp-0.2-finetuning': {
+        'batch_size': 64,
+        'learning_rate': 5e-5,
+        'dropout': 0.2,
+        'epochs': '5N-1V-5N',
+    },
+    'cfg2-dp-0.2-finetuning-v2': {
+        'batch_size': 64,
+        'learning_rate': 5e-5,
+        'dropout': 0.2,
+        'epochs': '5N-2V-5N',
+    },
+    'cfg2-dp-0.2-finetuning-v3': {
+        'batch_size': 64,
+        'learning_rate': 1e-4,
+        'dropout': 0.2,
+        'epochs': '5N-2V-5N',
+    },
+    'cfg2-dp-0.2-speech-commands': {
+        'batch_size': 64,
+        'learning_rate': 4e-4,
+        'dropout': 0.2,
         'epochs': '10N-1V-20N',
     }
 }
@@ -298,7 +322,7 @@ def eval_victim_viterbi_scratch(args, dataset, dataset_test, target_x, target_fi
         # "model_clean_test_acc": model_acc,
         "poisons_classification_loss": poisons_classification_loss.item(),
         "poisons_imp_indices_classification_loss": poisons_imp_indices_classification_loss.item(),
-        "model_pred": "".join([str(p) for p in pred_phoneme_seq]),
+        "model_pred": " ".join([str(p) for p in pred_phoneme_seq]),
         "test_res": test_res,
         "speaker_res": speaker_res
     }
@@ -404,6 +428,9 @@ def preprocess(task, raw_clean_data_dir, poisoned_dataset_path, feature_paramete
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
+    parser.add_argument('--base-model', default=None, type=Path, help='in case we want to load a base model')
+    parser.add_argument('--base-hmm', default=None, type=Path, help='in case we want to load a base model')
+    
     parser.add_argument('--data-dir', default='/asr-python/data', type=Path)
     parser.add_argument('--attack-dir',
                         default='_adversarial_paper2/one-digit-exp/eps--1.00/TEST-MAN-IP-5A/adv-label-6')
@@ -415,10 +442,10 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', default=32, type=int)
     parser.add_argument('--learning-rate', default=1e-4, type=float)
     parser.add_argument('--viterbi-scratch', default=True)
-    parser.add_argument('--model-type', default='ThreeLayer', choices=['TwoLayerLight', 'TwoLayerPlus', 'ThreeLayer', 'FourLayerPlus'])
+    parser.add_argument('--model-type', default='ThreeLayer', choices=['TwoLayerLight', 'TwoLayerPlus', 'ThreeLayer', 'FourLayerPlus', 'ThreeLayerPlusPlus'])
     parser.add_argument('--epochs', default='15N-3V-15N', choices=['15N-3V-15N', '10N-2V-20N'])
 
-    parser.add_argument('--victim-config', default=None, choices=['cfg1', 'cfg2', 'cfg2-dp-0.2'])
+    parser.add_argument('--victim-config', default=None, choices=['cfg1', 'cfg2', 'cfg2-dp-0.2', 'cfg2-dp-0.2-finetuning-v2'])
 
     parser.add_argument('--speakers-list-path', default='/asr-python/speakers-training.txt')
     parser.add_argument('--speaker-start-index', default=-1, type=int)
@@ -475,7 +502,7 @@ if __name__ == "__main__":
 
     attack_dir = Path(params.attack_dir)
 
-    assert os.path.exists(attack_dir), print(f'attack dir does not exits {attack_dir}')
+    assert attack_dir.exists(), print(f'attack dir does not exist {attack_dir}')
 
     if not attack_dir.joinpath('log.txt').is_file():
         assert len(list(attack_dir.iterdir())) == 1, "more than one instance of attack exist!"
@@ -497,10 +524,22 @@ if __name__ == "__main__":
     poison_paths = sorted(attack_last_step_dir.glob("*.wav"))
 
     if params.viterbi_scratch:
+
         if params.victim_config is not None:
             eval_res_path = attack_last_step_dir / f"victim-{params.victim_config}"
         else:
             eval_res_path = attack_last_step_dir
+        
+        if params.base_model and params.base_hmm:
+            base_model_name = params.base_model.parent.parent.name
+            eval_res_path = eval_res_path / f'fine-tuning-from-{base_model_name}'
+            print("Loading the base model and hmm from:")
+            print(base_model_name)
+            
+            hmm = pickle.load(params.base_hmm.open('rb'))
+            model = pickle.load(params.base_model.open('rb'))
+        else:
+            model = None
 
         if params.model_type in params.attack_dir:
             # The victim's architecture is the same as the surrogate networks.
@@ -537,8 +576,11 @@ if __name__ == "__main__":
             dataset_test = Dataset(poisoned_dataset_path.joinpath('plain', 'TEST'), feature_parameters, params.seed)
             dataset.poisons = Poisons(poisoned_dataset_path.joinpath('plain', 'TRAIN'), poison_paths,
                                       attack_dir.joinpath("poisons").with_suffix(".json"))
-            # Training the model
-            model = init_model(params.model_type, feature_parameters, dataset.hmm, dropout=params.dropout)
+            
+            if model is None:
+                # Training the model
+                print("loading model from scratch")
+                model = init_model(params.model_type, feature_parameters, dataset.hmm, dropout=params.dropout)
 
             if params.epochs == '15N-3V-15N':
                 model.train_model(dataset, epochs=15, batch_size=params.batch_size, lr=params.learning_rate)
@@ -558,6 +600,24 @@ if __name__ == "__main__":
                                   lr=params.learning_rate, update_y_label=True)
                 model.hmm.A = model.hmm.modifyTransitions(model.hmm.A_count)
                 model.train_model(dataset, epochs=20, batch_size=params.batch_size, lr=params.learning_rate)
+            elif params.epochs == '10N-2V-20N':
+                model.train_model(dataset, epochs=10, batch_size=params.batch_size, lr=params.learning_rate)
+                model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True,
+                                  lr=params.learning_rate)
+                model.hmm.A = model.hmm.modifyTransitions(model.hmm.A_count)
+                model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True,
+                                  lr=params.learning_rate, update_y_label=True)
+                model.train_model(dataset, epochs=20, batch_size=params.batch_size, lr=params.learning_rate)
+            elif params.epochs == '5N-2V-5N':
+                model.train_model(dataset, epochs=5, batch_size=params.batch_size, lr=params.learning_rate)
+                # model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True,
+                #                   lr=params.learning_rate)
+                model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True,
+                                  lr=params.learning_rate)
+                model.hmm.A = model.hmm.modifyTransitions(model.hmm.A_count)
+                model.train_model(dataset, epochs=1, batch_size=params.batch_size, viterbi_training=True,
+                                  lr=params.learning_rate, update_y_label=True)
+                model.train_model(dataset, epochs=5, batch_size=params.batch_size, lr=params.learning_rate)
             else:
                 assert False
 

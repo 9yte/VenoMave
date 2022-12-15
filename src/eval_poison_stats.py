@@ -9,6 +9,7 @@ import torch
 from tqdm import tqdm
 
 import recognizer.tools as tools
+from exp.parse_digit_replacement_results import get_onechar_seq
 from dataset import Dataset
 
 import psycho
@@ -105,21 +106,27 @@ def main(exp_dir, dataset, model_type, ignore_failed_attacks=True):
     print(f"    @ {exp_dir}")
     failed = []
     for target in tqdm(list(targets), bar_format='    {l_bar}{bar:30}{r_bar}'):
-
+        
+        # if not len(target.parent.parent.name.split("-")[-1]) == 2:
+        #     continue
         # if 'TEST-MAN-HJ-7A' not in str(target):
         #     continue
         try:
             if model_type in str(exp_dir):
                 eval_res = list(target.parent.rglob('new-hmm/victim_performance.json'))
             else:
-                eval_res = list(target.parent.rglob(f'{model_type}-new-hmm/victim_performance.json'))
+                eval_res = list(target.parent.rglob(f'victim-cfg2-dp-0.2/speakers-56-112-{model_type}-new-hmm/victim_performance.json'))
 
             assert len(eval_res) == 1, f'eval_res = {eval_res}'
             eval_res = eval_res[0]
             with open(eval_res) as f:
                 eval_res = json.load(f)
+
+            eval_res['model_pred'] = get_onechar_seq(eval_res['model_pred'])
+
             model_pred = eval_res['model_pred']
             adv_digit = target.parent.parent.name.split("-")[-1]
+
             if model_pred != adv_digit:
                 failed.append("{}/{}".format(str(target).split("/")[-4], str(target).split("/")[-3]))
                 if ignore_failed_attacks:
@@ -159,6 +166,7 @@ def main(exp_dir, dataset, model_type, ignore_failed_attacks=True):
                 # if filename not in selected_files['poisons'][target_name]:
                 #     continue
                 _, x_clean, _, _ = dataset[filename]
+                x_clean = x_clean.cuda()
                 x_poison = dataset.load_wav(poison_wavs[filename])
 
                 adv_noise, snr_per_poison_frame = compute_maxnoise_and_snrseg(x_clean, x_poison, dataset, offsets)
@@ -166,29 +174,35 @@ def main(exp_dir, dataset, model_type, ignore_failed_attacks=True):
                 stats[target_name]['adv_noise'] += [adv_noise]
                 stats[target_name]['snr_per_poison_frame'] = [snr_per_poison_frame]
 
-                threshs_file = dataset.get_absolute_wav_path(filename).with_suffix(".csv")
-                adv_noise, snr_per_poison_frame = compute_maxnoise_and_snrseg_perc(x_clean, x_poison, dataset, offsets,
-                                                                                   threshs_file)
+                # threshs_file = dataset.get_absolute_wav_path(filename).with_suffix(".csv")
+                # adv_noise, snr_per_poison_frame = compute_maxnoise_and_snrseg_perc(x_clean, x_poison, dataset, offsets,
+                #                                                                    threshs_file)
 
-                stats[target_name]['adv_noise_perceptible'] += [adv_noise]
-                stats[target_name]['snr_perceptible_per_poison_frame'] = [snr_per_poison_frame]
+                # stats[target_name]['adv_noise_perceptible'] += [adv_noise]
+                # stats[target_name]['snr_perceptible_per_poison_frame'] = [snr_per_poison_frame]
+                stats[target_name]['adv_noise_perceptible'] += [0]
+                stats[target_name]['snr_perceptible_per_poison_frame'] = [0]
 
             # get snr all
             stats[target_name]['snr_per_poison_all'] = []
             stats[target_name]['snr_perceptible_per_poison_all'] = []
             for filename, _ in poisons.items():
                 _, x_clean, _, _ = dataset[filename]
+                x_clean = x_clean.cuda()
                 x_poison = dataset.load_wav(poison_wavs[filename])
 
                 _, snr = compute_maxnoise_and_snrseg(x_clean, x_poison, dataset, None)
                 stats[target_name]['snr_per_poison_all'] += [snr]
 
-                threshs_file = dataset.get_absolute_wav_path(filename).with_suffix(".csv")
-                _, snr = compute_maxnoise_and_snrseg_perc(x_clean, x_poison, dataset, None,
-                                                          threshs_file)
-                stats[target_name]['snr_perceptible_per_poison_all'] += [snr]
+                # threshs_file = dataset.get_absolute_wav_path(filename).with_suffix(".csv")
+                # _, snr = compute_maxnoise_and_snrseg_perc(x_clean, x_poison, dataset, None,
+                #                                           threshs_file)
+                # stats[target_name]['snr_perceptible_per_poison_all'] += [snr]
+                stats[target_name]['snr_perceptible_per_poison_all'] += [0]
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(e)
             print(f"[!] {target_name} @ failed")
 
@@ -252,6 +266,6 @@ if __name__ == "__main__":
                                                                         feature_parameters['sampling_rate'])
 
     print('[+] load dataset')
-    dataset = Dataset(Path(params.data_dir, params.model_type, 'aligned').joinpath('TRAIN'), feature_parameters)
+    dataset = Dataset(Path(params.data_dir, params.model_type, 'plain').joinpath('TRAIN'), feature_parameters)
 
     main(params.exp_dir, dataset, params.model_type, ignore_failed_attacks=False)

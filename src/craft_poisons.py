@@ -138,9 +138,12 @@ def eval_victim(model_type, feature_parameters, dataset, dataset_test, target, r
                          "model_pred": "".join([str(p) for p in pred_phoneme_seq])
                          }
 
+        pred_phoneme_seq = [str(p) for p in tools.str_to_digits(pred_phoneme_seq)]
         # print(transcription2string(pred_phoneme_seq), transcription2string([target.target_transcription]))
         # if not succesful we do not haave to eval more victim networks
-        if transcription2string(pred_phoneme_seq) != transcription2string([target.target_transcription]):
+
+        print(transcription2string(pred_phoneme_seq), transcription2string(list(target.target_transcription)))
+        if transcription2string(pred_phoneme_seq) != transcription2string(list(target.target_transcription)):
             return loss_adversarial_states, model_acc, victim_adv_states_acc, res, False
 
     return loss_adversarial_states, model_acc, victim_adv_states_acc, res, True
@@ -203,7 +206,7 @@ def bullseye_loss(target, poisons, models, compute_gradients=None, phi_x_target_
 
 def craft_poisons(params, speakers_list, speakers_split_identifier,
                   feature_parameters, poison_parameters,
-                  victim_hmm_seed=123456, train_subs_in_parallel=True):
+                  victim_hmm_seed=123456, train_subs_in_parallel=False):
     adv_target_sequence_type = params.adv_target_sequence_type
     model_type = params.model_type
     data_dir = params.data_dir
@@ -426,9 +429,9 @@ if __name__ == "__main__":
 
     parser.add_argument('--data-dir', default='/asr-python/data', type=Path)
     parser.add_argument('--exp-dir', default='/asr-python/_adversarial_paper_usenix2022/', type=Path)
-    parser.add_argument('--adv-target-sequence-type', default='ratioAnalysis',
-                        choices=['onlyForcedAlignment', 'ratioAnalysis', 'bruteForce-noZero',
-                                 'bruteForce', 'closestStates'])
+    parser.add_argument('--adv-target-sequence-type', default='uniformRatio',
+                        choices=['uniformRatio', 'onlyForcedAlignment', 'ratioAnalysis', 'bruteForce-noZero',
+                                 'bruteForce', 'closestStates', 'random'])
     parser.add_argument('--task', default='TIDIGITS', choices=['TIDIGITS', 'SPEECHCOMMANDS'])
 
     parser.add_argument('--device', default="cuda", choices=["cuda", "cpu"])
@@ -437,8 +440,8 @@ if __name__ == "__main__":
     parser.add_argument('--eps', default=-1, type=float)
     parser.add_argument('--outer-crafting-steps', default=20, type=int)
     parser.add_argument('--inner-crafting-steps', default=500, type=int)
-    parser.add_argument('--num-models', default=4, type=int)
-    parser.add_argument('--poisons-budget', default=0.02, type=float)
+    parser.add_argument('--num-models', default=8, type=int)
+    parser.add_argument('--poisons-budget', default=0.005, type=float)
     parser.add_argument('--psycho-offset', '-lambda', default=None, type=int)
     parser.add_argument('--dropout', default=0.0, type=float,
                         help="enables the dropout of the models, in training and also afterwards")
@@ -458,7 +461,7 @@ if __name__ == "__main__":
             speakers_list = f.readlines()
             speakers_list = [s.strip() for s in speakers_list]
         if params.speaker_start_index != -1 or params.speaker_end_index != -1:
-            assert 0 <= params.speaker_start_index and params.speaker_end_index <= len(speakers_list)
+            assert 0 <= params.speaker_start_index and params.speaker_end_index <= len(speakers_list) - 1
             speakers_list = speakers_list[params.speaker_start_index:params.speaker_end_index + 1]
             speakers_split_identifier = 'speakers-{}-{}'.format(params.speaker_start_index, params.speaker_end_index)
             params.exp_dir = f"{params.exp_dir}/{speakers_split_identifier}"
